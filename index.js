@@ -100,7 +100,17 @@ process.on('unhandledRejection', async (error) => {
 });
 // ================================================
 
-const client = new Client();
+const client = new Client({
+    checkUpdate: false,
+    autoRedeemNitro: false,
+    ws: {
+        properties: {
+            $os: 'Windows',
+            $browser: 'Discord Client',
+            $device: 'desktop'
+        }
+    }
+});
 
 const fmt = (unixSecs) => `<t:${unixSecs}:F> (<t:${unixSecs}:R>)`;
 
@@ -137,39 +147,31 @@ async function enrichUser(user) {
     return { flagsArr, bannerUrl };
 }
 
-const WARM_DELAY_MS = Number(process.env.WARM_DELAY_MS || 750);
+client.once('ready', async () => {
+    console.log(`[Ready] Logged in as ${client.user.tag || client.user.username}`);
 
-async function warmGuildCache(guild) {
+    // Verify only the target log channel exists
+    let logChannelName = 'Unknown';
     try {
-        await guild.fetch().catch(() => null);
-        if (guild.channels.cache.size < 50) {
-            await guild.channels.fetch().catch(() => null);
+        const logChannel = client.channels.cache.get(cfg.logChannelId) ||
+                           await client.channels.fetch(cfg.logChannelId).catch(() => null);
+        if (logChannel) {
+            logChannelName = `#${logChannel.name}`;
+            console.log(`[Ready] Target log channel: #${logChannel.name} (${logChannel.guild?.name || 'Direct'})`);
+        } else {
+            console.warn(`[Warning] Could not find LOG_CHANNEL_ID: ${cfg.logChannelId}`);
         }
     } catch (err) {
-        console.error(`[warmGuildCache] ${guild?.name || guild?.id}:`, err?.message || err);
+        console.warn(`[Warning] Channel check failed: ${err.message}`);
     }
-}
-
-async function warmAllGuilds() {
-    const guilds = [...client.guilds.cache.values()];
-    console.log(`Warming channel caches for ${guilds.length} guild(s)…`);
-    let i = 0;
-    for (const g of guilds) {
-        i++;
-        console.log(`(${i}/${guilds.length}) ${g.name} [${g.id}]`);
-        await warmGuildCache(g);
-        await sleep(WARM_DELAY_MS);
-    }
-    console.log('Cache warm-up complete.');
-}
-
-client.once('ready', async () => {
-    console.log(`Logged in as ${client.user.tag || client.user.username}`);
 
     // Send success alert to Telegram
-    await sendTelegramAlert(`✅ <b>Bot Online!</b>\n\nLogged in as: <code>${client.user.tag || client.user.username}</code>\nMonitoring: <code>${client.guilds.cache.size}</code> servers`);
-
-    await warmAllGuilds();
+    await sendTelegramAlert(
+        `✅ <b>Bot Online & Stealth Active</b>\n\n` +
+        `User: <code>${client.user.tag || client.user.username}</code>\n` +
+        `Monitoring: <code>${client.guilds.cache.size}</code> servers\n` +
+        `Log Channel: <code>${logChannelName}</code>`
+    );
 
     // 15-minute connection health check
     let connectionWasDown = false;
@@ -222,9 +224,7 @@ client.on('shardError', async (error, shardId) => {
 // ========================================================
 
 client.on('guildCreate', async (guild) => {
-    console.log(`Joined new guild: ${guild.name} [${guild.id}]`);
-    await warmGuildCache(guild);
-    console.log(`Warmed: ${guild.name}`);
+    console.log(`[Guild] Joined new guild: ${guild.name} [${guild.id}]`);
     await sendTelegramAlert(`📥 <b>Joined New Server</b>\n\nName: ${guild.name}\nID: <code>${guild.id}</code>`);
 });
 
@@ -232,7 +232,7 @@ client.on('guildMemberAdd', async (member) => {
     try {
         const guild = member.guild;
 
-        if (!guild.members.cache.has(member.id)) {
+        if (!member.user && !guild.members.cache.has(member.id)) {
             await guild.members.fetch(member.id).catch(() => null);
         }
 
