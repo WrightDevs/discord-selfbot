@@ -122,17 +122,6 @@ async function warmGuildCache(guild) {
     try {
         await guild.fetch().catch(() => null);
         await guild.channels.fetch().catch(() => null);
-
-        try {
-            await guild.members.fetch({ withPresences: false });
-        } catch {
-            await sleep(1500);
-            try {
-                await guild.members.fetch({ withPresences: false });
-            } catch { }
-        }
-
-        try { await guild.roles.fetch().catch(() => null); } catch { }
     } catch (err) {
         console.error(`[warmGuildCache] ${guild?.name || guild?.id}:`, err?.message || err);
     }
@@ -140,13 +129,13 @@ async function warmGuildCache(guild) {
 
 async function warmAllGuilds() {
     const guilds = [...client.guilds.cache.values()];
-    console.log(`Warming caches for ${guilds.length} guild(s)…`);
+    console.log(`Warming channel caches for ${guilds.length} guild(s)…`);
     let i = 0;
     for (const g of guilds) {
         i++;
         console.log(`(${i}/${guilds.length}) ${g.name} [${g.id}]`);
         await warmGuildCache(g);
-        await sleep(750);
+        await sleep(250);
     }
     console.log('Cache warm-up complete.');
 }
