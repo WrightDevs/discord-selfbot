@@ -2,14 +2,21 @@ require('dotenv').config();
 const { Client } = require('discord.js-selfbot-v13');
 
 const cfg = {
-    token: process.env.DISCORD_TOKEN,
-    logChannelId: process.env.LOG_CHANNEL_ID,
+    token: (process.env.DISCORD_TOKEN || '').trim(),
+    logChannelId: (process.env.LOG_CHANNEL_ID || '').trim(),
 };
 
 if (!cfg.token || !cfg.logChannelId) {
     console.error('Missing DISCORD_TOKEN or LOG_CHANNEL_ID in .env file. Fill them in and restart.');
     process.exit(1);
 }
+
+const parts = cfg.token.split('.');
+if (parts.length !== 3 || cfg.token.length < 60) {
+    console.error(`Token malformed: ${parts.length} segments, ${cfg.token.length} chars`);
+    process.exit(1);
+}
+console.log(`Token loaded: length=${cfg.token.length}, prefix=${cfg.token.slice(0, 8)}...`);
 
 // ========== TELEGRAM ALERT SYSTEM ==========
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -42,6 +49,9 @@ async function sendTelegramAlert(message) {
 }
 
 // ========== CRASH & SHUTDOWN HANDLERS ==========
+const AUTH_COOLDOWN_MS = 3 * 60 * 1000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 let isShuttingDown = false;
 
 async function handleShutdown(reason, details = '') {
@@ -49,6 +59,17 @@ async function handleShutdown(reason, details = '') {
     isShuttingDown = true;
     console.error(`[Shutdown] ${reason}: ${details}`);
     await sendTelegramAlert(`🛑 <b>BOT STOPPED!</b>\n\n<b>Reason:</b> ${reason}\n${details ? `<code>${details}</code>` : ''}`);
+    process.exit(1);
+}
+
+async function fatalAuth(reason, details = '') {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.error(`[Fatal auth] ${reason}: ${details}`);
+    await sendTelegramAlert(
+        `🚨 <b>TOKEN DEAD — cooling down 3 min</b>\n${reason}\n<code>${details}</code>`
+    );
+    await sleep(AUTH_COOLDOWN_MS);
     process.exit(1);
 }
 
@@ -72,7 +93,7 @@ process.on('unhandledRejection', async (error) => {
     console.error('⚠️ Unhandled Rejection:', error);
     const msg = error?.message || `${error}`;
     if (msg.includes('invalid token') || msg.includes('TOKEN_INVALID')) {
-        await handleShutdown('Invalid Discord Token', 'Your token is expired or incorrect.');
+        await fatalAuth('Invalid Discord Token', msg);
     } else {
         await sendTelegramAlert(`⚠️ <b>UNHANDLED REJECTION!</b>\n\n<code>${msg}</code>`);
     }
@@ -80,8 +101,6 @@ process.on('unhandledRejection', async (error) => {
 // ================================================
 
 const client = new Client();
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const fmt = (unixSecs) => `<t:${unixSecs}:F> (<t:${unixSecs}:R>)`;
 
@@ -118,10 +137,14 @@ async function enrichUser(user) {
     return { flagsArr, bannerUrl };
 }
 
+const WARM_DELAY_MS = Number(process.env.WARM_DELAY_MS || 750);
+
 async function warmGuildCache(guild) {
     try {
         await guild.fetch().catch(() => null);
-        await guild.channels.fetch().catch(() => null);
+        if (guild.channels.cache.size < 50) {
+            await guild.channels.fetch().catch(() => null);
+        }
     } catch (err) {
         console.error(`[warmGuildCache] ${guild?.name || guild?.id}:`, err?.message || err);
     }
@@ -135,7 +158,7 @@ async function warmAllGuilds() {
         i++;
         console.log(`(${i}/${guilds.length}) ${g.name} [${g.id}]`);
         await warmGuildCache(g);
-        await sleep(250);
+        await sleep(WARM_DELAY_MS);
     }
     console.log('Cache warm-up complete.');
 }
@@ -173,11 +196,8 @@ client.once('ready', async () => {
 // ========== DISCORD CONNECTION & TOKEN MONITORS ==========
 // Triggered if the Discord token is reset, revoked, or account password changed
 client.on('invalidated', async () => {
-    console.error('❌ Session invalidated! The Discord token has changed or expired.');
-    await sendTelegramAlert(
-        '🚨 <b>DISCORD TOKEN INVALIDATED!</b>\n\nYour Discord token has expired or changed (password change / session logout).\nPlease update <code>.env</code> with a new token and restart.'
-    );
-    process.exit(1);
+    console.error(`❌ Session invalidated! WebSocket status: ${client.ws.status}`);
+    await fatalAuth('Session invalidated', `Gateway status: ${client.ws.status}`);
 });
 
 // Triggered when Discord WebSocket drops
@@ -265,10 +285,6 @@ client.on('guildMemberAdd', async (member) => {
     }
 });
 
-client.login(cfg.token).catch(async (err) => {
-    console.error('❌ Failed to login to Discord:', err);
-    await sendTelegramAlert(
-        `🚨 <b>DISCORD LOGIN FAILED!</b>\n\n<b>Error:</b> <code>${err.message}</code>\n\nPlease check your <code>DISCORD_TOKEN</code> in your .env file.`
-    );
-    process.exit(1);
+client.login(cfg.token).catch((err) => {
+    fatalAuth('Login failed', err.message);
 });
