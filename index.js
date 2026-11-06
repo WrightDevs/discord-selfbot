@@ -172,27 +172,6 @@ client.once('ready', async () => {
         `Monitoring: <code>${client.guilds.cache.size}</code> servers\n` +
         `Log Channel: <code>${logChannelName}</code>`
     );
-
-    // 15-minute connection health check
-    let connectionWasDown = false;
-    setInterval(async () => {
-        const ping = client.ws.ping;
-        const status = client.ws.status; // 0 = READY
-
-        if (status !== 0 || ping === -1) {
-            connectionWasDown = true;
-            console.warn(`[HealthCheck] Connection issue detected. Status: ${status}, Ping: ${ping}ms`);
-            await sendTelegramAlert(
-                `⚠️ <b>Discord Connection Warning:</b>\nGateway connection degraded.\nStatus: <code>${status}</code> | Ping: <code>${ping}ms</code>`
-            );
-        } else if (connectionWasDown) {
-            connectionWasDown = false;
-            console.log(`[HealthCheck] Connection recovered. Ping: ${ping}ms`);
-            await sendTelegramAlert(
-                `✅ <b>Discord Connection Restored:</b>\nGateway latency: <code>${ping}ms</code>`
-            );
-        }
-    }, 15 * 60 * 1000);
 });
 
 // ========== DISCORD CONNECTION & TOKEN MONITORS ==========
